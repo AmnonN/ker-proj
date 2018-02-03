@@ -1,39 +1,45 @@
 #include <linux/module.h>   /* Needed by all modules */
 #include <linux/net.h>
-#include <linux/string.h>
-#include <linux/slab.h>
+#include <linux/string.h> // for memcpy
+#include <linux/slab.h>   // for kmalloc kfree
 #include <linux/uaccess.h>
+#include <linux/socket.h>
 #include "mysock_action.h"
 
-static struct proto_ops custom_ops;
-static struct proto_ops original_ops;
-static char *header_buff;
+extern int inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t size);
+
+struct proto_ops custom_ops;
+struct proto_ops original_ops;
+static int       header_size;
+static char      *header_buff;
 
 int mysock_ioctl(struct socket *sock,
                  unsigned int cmd,
                  unsigned long arg)
 {
+    printk("mysock_ioctl: arg addr %lu\n", arg);
     //unsigned long header_size;
     switch (cmd)
     {
         case (SET_INITIAL_HEADER):
         {
-            unsigned long header_size = 0;
-
+            printk("mysock_ioctl: setting initial buffer!\n");
             if (header_buff != NULL)
             {
                 kfree(header_buff);
             }
 
             // first 4 bytes of the buffer is the size
-            copy_from_user((char*)header_size, (const char*)arg, 4);
+            copy_from_user((char*)&header_size, (char*)arg, 4);
 
-            printk("header size is %lu", header_size);
+            printk("header size is %du", header_size);
 
             header_buff = kmalloc(header_size, GFP_KERNEL);
 
             // copy the rest of the header buffer
             copy_from_user(header_buff, ((const char*)arg) + 4, header_size);
+
+            printk("mysock_ioctl: header size : %du ", header_size);
 
             break;
         }
@@ -43,7 +49,16 @@ int mysock_ioctl(struct socket *sock,
 
 int mysock_sendmsg(struct socket *sock, struct msghdr *m, size_t total_len)
 {
-    return 0;
+    struct iovec* nonconst_iovec;
+
+    // Add the header part to the sent data
+    total_len += header_size;
+    m->msg_iter.count = total_len;
+    nonconst_iovec = (struct iovec*)&m->msg_iter.iov[0]; // Removing the const from iovec, shhhh..
+    nonconst_iovec->iov_base = header_buff;
+    nonconst_iovec->iov_len = header_size;
+
+    return inet_sendmsg(sock, m, total_len);
 }
 
  
@@ -92,6 +107,9 @@ static void copy_socket(struct socket *dst, const struct socket *src)
 static int mysock_create(struct net *net, struct socket *sock, int protocol,
                  int kern)
 {
+    header_size = 0;
+    header_buff = NULL;
+
     struct socket *temp_sock;
     int ret = sock_create(PF_INET, SOCK_DGRAM, 0, &temp_sock);
 
