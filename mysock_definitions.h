@@ -1,0 +1,6 @@
+#ifndef MYSOCK_DEFINITIONS_H
+#define MYSOCK_DEFINITIONS_H
+
+#define SIZE_OF_LENGTH 4
+
+#endif

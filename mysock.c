@@ -5,11 +5,13 @@
 #include <linux/uaccess.h>
 #include <linux/socket.h>
 #include "mysock_action.h"
+#include "mysock_definitions.h"
 
+extern int extern_inet_create(struct net *net, struct socket *sock, int protocol, int kern);
 extern int inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t size);
+extern int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
 
 struct proto_ops custom_ops;
-struct proto_ops original_ops;
 static int       header_size;
 static char      *header_buff;
 
@@ -17,32 +19,31 @@ int mysock_ioctl(struct socket *sock,
                  unsigned int cmd,
                  unsigned long arg)
 {
-    printk("mysock_ioctl: arg addr %lu\n", arg);
     //unsigned long header_size;
     switch (cmd)
     {
         case (SET_INITIAL_HEADER):
         {
-            printk("mysock_ioctl: setting initial buffer!\n");
             if (header_buff != NULL)
             {
                 kfree(header_buff);
             }
 
             // first 4 bytes of the buffer is the size
-            copy_from_user((char*)&header_size, (char*)arg, 4);
-
-            printk("header size is %du", header_size);
+            copy_from_user((char*)&header_size, (char*)arg, SIZE_OF_LENGTH);
 
             header_buff = kmalloc(header_size, GFP_KERNEL);
 
             // copy the rest of the header buffer
-            copy_from_user(header_buff, ((const char*)arg) + 4, header_size);
-
-            printk("mysock_ioctl: header size : %du ", header_size);
+            copy_from_user(header_buff, ((const char*)arg) + SIZE_OF_LENGTH, header_size);
 
             break;
         }
+        default:
+        {
+            return inet_ioctl(sock, cmd, arg);
+        }
+
     }
     return 0;
 }
@@ -94,13 +95,6 @@ static void copy_proto_ops(struct proto_ops *dst, const struct proto_ops *src)
 
 static void copy_socket(struct socket *dst, const struct socket *src)
 {
-    //unsigned long i;
-
-    // naive memcpy impl
-    //for (i = 0; i < sizeof(struct socket); ++i)
-    //{
-    //    ((char*)dst)[i] = ((const char*)src)[i];
-    //}
     memcpy((char*)dst, (char*)src, sizeof(struct socket));
 }
 
@@ -110,11 +104,8 @@ static int mysock_create(struct net *net, struct socket *sock, int protocol,
     header_size = 0;
     header_buff = NULL;
 
-    struct socket *temp_sock;
-    int ret = sock_create(PF_INET, SOCK_DGRAM, 0, &temp_sock);
+    int ret = extern_inet_create(net, sock, protocol, kern);
 
-    // copy result to the original socket
-    copy_socket(sock, temp_sock);
 
     static int custom_ops_initialized = 0;
     if (!custom_ops_initialized)
@@ -122,10 +113,6 @@ static int mysock_create(struct net *net, struct socket *sock, int protocol,
          copy_proto_ops(&custom_ops, sock->ops);
          custom_ops_initialized = 1;
     }
-
-    // save the original ops that we are goind to override (ioctl, send, recv)
-    original_ops.ioctl = custom_ops.ioctl;
-    original_ops.sendmsg = custom_ops.sendmsg;
 
     // set specific fields of the proto_ops
     custom_ops.family = PF_MYSOCK;
