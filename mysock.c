@@ -4,6 +4,7 @@
 #include <linux/slab.h>   // for kmalloc kfree
 #include <linux/uaccess.h>
 #include <linux/socket.h>
+#include <linux/types.h>
 #include "mysock_action.h"
 #include "mysock_definitions.h"
 
@@ -12,7 +13,7 @@ extern int inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t size);
 extern int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
 
 struct proto_ops custom_ops;
-static int       header_size;
+static uint32_t    header_size;
 static char      *header_buff;
 
 int mysock_ioctl(struct socket *sock,
@@ -30,12 +31,28 @@ int mysock_ioctl(struct socket *sock,
             }
 
             // first 4 bytes of the buffer is the size
-            copy_from_user((char*)&header_size, (char*)arg, SIZE_OF_LENGTH);
+            copy_from_user((char*)&header_size, (const char*)arg, SIZE_OF_LENGTH);
 
             header_buff = kmalloc(header_size, GFP_KERNEL);
 
             // copy the rest of the header buffer
             copy_from_user(header_buff, ((const char*)arg) + SIZE_OF_LENGTH, header_size);
+
+            break;
+        }
+        case (WRITE_TO_BUFF):
+        {
+            uint32_t offset;
+            uint32_t buffSize;
+
+            // The first 4 bytes are offset to write to
+            copy_from_user((char*)&offset, (const char*)arg, SIZE_OF_OFFSET);
+
+            // The next 4 bytees are the size of the buffer to write
+            copy_from_user((char*)&buffSize, ((const char*)arg) + SIZE_OF_OFFSET, SIZE_OF_LENGTH);
+
+            // Copy the rest of the buffer into the header buffer
+            copy_from_user(header_buff + offset, ((const char*)arg) + SIZE_OF_OFFSET + SIZE_OF_LENGTH, buffSize);
 
             break;
         }
@@ -93,19 +110,14 @@ static void copy_proto_ops(struct proto_ops *dst, const struct proto_ops *src)
      dst->splice_read = src->splice_read;
 }
 
-static void copy_socket(struct socket *dst, const struct socket *src)
-{
-    memcpy((char*)dst, (char*)src, sizeof(struct socket));
-}
-
 static int mysock_create(struct net *net, struct socket *sock, int protocol,
                  int kern)
 {
+    int ret;
     header_size = 0;
     header_buff = NULL;
 
-    int ret = extern_inet_create(net, sock, protocol, kern);
-
+    ret = extern_inet_create(net, sock, protocol, kern);
 
     static int custom_ops_initialized = 0;
     if (!custom_ops_initialized)
@@ -133,9 +145,10 @@ static const struct net_proto_family mysock_family_ops = {
  
 int init_module(void)
 {
+    int ret;
     header_buff = NULL;
 
-    int ret = sock_register(&mysock_family_ops);
+    ret = sock_register(&mysock_family_ops);
 
     if (ret == -ENOBUFS)
     {

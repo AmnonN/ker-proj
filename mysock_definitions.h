@@ -2,5 +2,6 @@
 #define MYSOCK_DEFINITIONS_H
 
 #define SIZE_OF_LENGTH 4
+#define SIZE_OF_OFFSET 4
 
 #endif
